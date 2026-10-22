@@ -40,23 +40,30 @@ function setShift(v){shift=v;$('sh1').classList.toggle('selected',v==='1A');$('s
 let selectedStoreKey='';
 function storeMappings(){const v=$('store').value.trim();return app.master.filter(m=>m.store===v && String(m.track).toLowerCase()!=='no')}
 function masterMappingKey(m){return [String(m.batch),String(m.lane)].join('|')}
-function mapping(){const matches=storeMappings();if(!matches.length)return null;const choice=$('mappingChoice').value;if(matches.length===1)return matches[0];return matches.find(m=>masterMappingKey(m)===choice)||null}
+function mapping(){
+  const matches=storeMappings();
+  // Only one authoritative batch/lane combination is permitted for automatic entry.
+  const keys=new Set(matches.map(masterMappingKey));
+  return keys.size===1 && matches.length===1 ? matches[0] : null;
+}
 function lookupStore(){
-  const store=$('store').value.trim(),matches=storeMappings(),wrap=$('mappingWrap'),select=$('mappingChoice');
-  if(selectedStoreKey!==store){selectedStoreKey=store;select.value='';select.dataset.selected=''}
-  if(matches.length>1){
-    wrap.classList.remove('hidden');
-    const old=select.value||select.dataset.selected||'';
-    select.innerHTML='<option value="">Choose batch / lane…</option>'+matches.map(m=>'<option value="'+esc(masterMappingKey(m))+'">Batch '+esc(m.batch)+' · Lane '+esc(m.lane)+'</option>').join('');
-    select.value=matches.some(m=>masterMappingKey(m)===old)?old:'';
-    select.dataset.selected=select.value;
-  }else{wrap.classList.add('hidden');select.innerHTML='';select.dataset.selected=''}
+  const store=$('store').value.trim(),matches=storeMappings();
+  // Never offer a batch/lane override: Store Master is the sole authority.
+  $('mappingWrap').classList.add('hidden');
+  $('mappingChoice').innerHTML='';
   const m=mapping();
-  $('assignment').innerHTML=m?'<b>Assigned loader: '+esc(shift==='1A'?m.a:m.b)+'</b><br>Batch '+esc(m.batch)+' • Lane '+esc(m.lane)+' • Track CPT: '+esc(m.track)+(m.note?'<br>'+esc(m.note):''):(matches.length>1?'Multiple Store Master assignments found. Select the correct batch and lane above.':'Enter a valid store from the Store Master to load its assignment.');
+  if(m){
+    const assigned=(shift==='1A'?m.a:m.b)||'Unassigned';
+    $('assignment').innerHTML='<b>Assigned loader: '+esc(assigned)+'</b><br>Batch '+esc(m.batch)+' • Lane '+esc(m.lane)+' • Track CPT: '+esc(m.track);
+  }else if(matches.length>1){
+    $('assignment').innerHTML='<b style="color:#ac432a">Store Master conflict for '+esc(store)+'.</b> Multiple assignments exist. Entry is locked until the Store Master is corrected.';
+  }else{
+    $('assignment').textContent=store?'Store not found in the Store Master. Entry cannot be saved.':'Enter a store to load its assigned batch, lane, and loader.';
+  }
 }
 function checkLow(){$('reasonWrap').classList.toggle('hidden',!($('cpt').value&&Number($('cpt').value)<2100))}
 function msg(s){$('entryMsg').textContent=s;setTimeout(()=>{$('entryMsg').textContent=''},5500)}
-async function saveRecord(ev){ev.preventDefault();if(!cloudUser){alert('Sign in first.');return}let m=mapping(),date=$('day').value,store=$('store').value.trim(),trailer=$('trailer').value.trim(),cpt=Number($('cpt').value),reason=$('reason').value.trim(),override=$('override').value.trim();if(!date||!m||String(m.track).toLowerCase()==='no'){alert('Select a valid Store Master assignment, including the batch and lane when more than one is available.');return}if(!trailer||!Number.isSafeInteger(cpt)||cpt<1){alert('Enter a valid trailer and whole-number CPT.');return}if(cpt<2100&&!reason){alert('A written explanation is required for trailers below 2,100.');return}if(editing){const prior=app.entries.find(x=>x.id===editing);if(prior&&(String(prior.batch)!==String(m.batch)||String(prior.lane)!==String(m.lane))&&!confirm('This changes the saved batch/lane assignment. Confirm only if correcting an originally incorrect Store Master selection.'))return;}const btn=$('saveBtn');btn.disabled=true;btn.textContent='Saving…';try{let record={shift_date:date,shift,store,trailer_number:trailer,cpt,batch:String(m.batch||''),lane:String(m.lane||''),loader:override||(shift==='1A'?m.a:m.b)||'Unassigned',assigned_loader:(shift==='1A'?m.a:m.b)||'',replacement_loader:override,exception_reason:cpt<2100?reason:'',notes:$('notes').value.trim()};if(editing){let old=app.entries.find(x=>x.id===editing);if(old&&old.created_by!==cloudUser.id)throw Error('You can only edit your own submissions.');const updated=await cloudRequest('/rest/v1/cpt_records?id=eq.'+encodeURIComponent(editing),{method:'PATCH',body:JSON.stringify(record),headers:{Prefer:'return=representation'}});if(!Array.isArray(updated)||updated.length!==1)throw Error('No record was updated. Please refresh and check your permissions.')}else{record.created_by=cloudUser.id;await cloudRequest('/rest/v1/cpt_records',{method:'POST',body:JSON.stringify(record),headers:{Prefer:'return=representation'}})}let edited=!!editing;cancelEdit();$('store').value='';selectedStoreKey='';$('mappingChoice').value='';$('mappingChoice').dataset.selected='';$('trailer').value='';$('cpt').value='';$('reason').value='';$('notes').value='';$('override').value='';lookupStore();checkLow();await cloudRefresh();msg(edited?'Trailer updated in shared database.':'Trailer saved to shared database.')}catch(err){alert('Save failed; no local substitute was saved. '+err.message)}finally{btn.disabled=false;if(!editing)btn.textContent='+ Save Trailer'}}
+async function saveRecord(ev){ev.preventDefault();if(!cloudUser){alert('Sign in first.');return}let m=mapping(),date=$('day').value,store=$('store').value.trim(),trailer=$('trailer').value.trim(),cpt=Number($('cpt').value),reason=$('reason').value.trim(),override=$('override').value.trim();if(!date||!m||String(m.track).toLowerCase()==='no'){alert('Store Master assignment is missing or conflicting. Please correct the Store Master before saving.');return}if(!trailer||!Number.isSafeInteger(cpt)||cpt<1){alert('Enter a valid trailer and whole-number CPT.');return}if(cpt<2100&&!reason){alert('A written explanation is required for trailers below 2,100.');return}if(editing){const prior=app.entries.find(x=>x.id===editing);if(prior&&(String(prior.batch)!==String(m.batch)||String(prior.lane)!==String(m.lane))){alert('The historical batch/lane differs from the current Store Master. Editing is blocked to protect the original assignment.');return;}}const btn=$('saveBtn');btn.disabled=true;btn.textContent='Saving…';try{let record={shift_date:date,shift,store,trailer_number:trailer,cpt,batch:String(m.batch||''),lane:String(m.lane||''),loader:override||(shift==='1A'?m.a:m.b)||'Unassigned',assigned_loader:(shift==='1A'?m.a:m.b)||'',replacement_loader:override,exception_reason:cpt<2100?reason:'',notes:$('notes').value.trim()};if(editing){let old=app.entries.find(x=>x.id===editing);if(old&&old.created_by!==cloudUser.id)throw Error('You can only edit your own submissions.');const updated=await cloudRequest('/rest/v1/cpt_records?id=eq.'+encodeURIComponent(editing),{method:'PATCH',body:JSON.stringify(record),headers:{Prefer:'return=representation'}});if(!Array.isArray(updated)||updated.length!==1)throw Error('No record was updated. Please refresh and check your permissions.')}else{record.created_by=cloudUser.id;await cloudRequest('/rest/v1/cpt_records',{method:'POST',body:JSON.stringify(record),headers:{Prefer:'return=representation'}})}let edited=!!editing;cancelEdit();$('store').value='';selectedStoreKey='';$('mappingChoice').value='';$('mappingChoice').dataset.selected='';$('trailer').value='';$('cpt').value='';$('reason').value='';$('notes').value='';$('override').value='';lookupStore();checkLow();await cloudRefresh();msg(edited?'Trailer updated in shared database.':'Trailer saved to shared database.')}catch(err){alert('Save failed; no local substitute was saved. '+err.message)}finally{btn.disabled=false;if(!editing)btn.textContent='+ Save Trailer'}}
 function cancelEdit(){document.querySelector('.formpanel')?.classList.remove('editing-highlight');editing=null;$('formTitle').textContent='Add Completed Trailer';$('saveBtn').textContent='+ Save Trailer';$('cancelEdit').classList.add('hidden')}
 function editRecord(id){
   console.info('CPT Edit Build EDIT-04 — requested record',id);
@@ -69,7 +76,7 @@ function editRecord(id){
   $('store').value=e.store;
   selectedStoreKey='';
   lookupStore();
-  if(storeMappings().length>1){const key=[String(e.batch),String(e.lane)].join('|');$('mappingChoice').value=key;$('mappingChoice').dataset.selected=key;}
+  // Historical batch/lane are preserved in saved records; mapping must be valid to edit.
   $('trailer').value=e.trailer;
   $('cpt').value=e.cpt;
   $('override').value=e.override||'';
