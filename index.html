@@ -73,7 +73,23 @@ function lookupStore(){
 function checkLow(){$('reasonWrap').classList.toggle('hidden',!($('cpt').value&&Number($('cpt').value)<2100))}
 function msg(s){$('entryMsg').textContent=s;setTimeout(()=>{$('entryMsg').textContent=''},5500)}
 async function saveRecord(ev){ev.preventDefault();if(!cloudUser){alert('Sign in first.');return}if(!editing&&!verifyReportingDate())return;let m=mapping(),date=$('day').value,store=$('store').value.trim(),trailer=$('trailer').value.trim(),cpt=Number($('cpt').value),reason=$('reason').value.trim(),override=$('override').value.trim();if(!date||!m||String(m.track).toLowerCase()==='no'){alert('Store Master assignment is missing or conflicting. Please correct the Store Master before saving.');return}if(!trailer||!Number.isSafeInteger(cpt)||cpt<1){alert('Enter a valid trailer and whole-number CPT.');return}if(cpt<2100&&!reason){alert('A written explanation is required for trailers below 2,100.');return}if(editing){const prior=app.entries.find(x=>x.id===editing);if(prior&&(String(prior.batch)!==String(m.batch)||String(prior.lane)!==String(m.lane))){alert('The historical batch/lane differs from the current Store Master. Editing is blocked to protect the original assignment.');return;}}const btn=$('saveBtn');btn.disabled=true;btn.textContent='Saving…';try{let record={shift_date:date,shift,store,trailer_number:trailer,cpt,batch:String(m.batch||''),lane:String(m.lane||''),loader:override||(shift==='1A'?m.a:m.b)||'Unassigned',assigned_loader:(shift==='1A'?m.a:m.b)||'',replacement_loader:override,exception_reason:cpt<2100?reason:'',notes:$('notes').value.trim()};if(editing){let old=app.entries.find(x=>x.id===editing);if(old&&old.created_by!==cloudUser.id)throw Error('You can only edit your own submissions.');const updated=await cloudRequest('/rest/v1/cpt_records?id=eq.'+encodeURIComponent(editing),{method:'PATCH',body:JSON.stringify(record),headers:{Prefer:'return=representation'}});if(!Array.isArray(updated)||updated.length!==1)throw Error('No record was updated. Please refresh and check your permissions.')}else{record.created_by=cloudUser.id;await cloudRequest('/rest/v1/cpt_records',{method:'POST',body:JSON.stringify(record),headers:{Prefer:'return=representation'}})}let edited=!!editing;cancelEdit();$('store').value='';selectedStoreKey='';$('mappingChoice').value='';$('mappingChoice').dataset.selected='';$('trailer').value='';$('cpt').value='';$('reason').value='';$('notes').value='';$('override').value='';lookupStore();checkLow();await cloudRefresh();msg(edited?'Trailer updated in shared database.':'Trailer saved to shared database.')}catch(err){alert('Save failed; no local substitute was saved. '+err.message)}finally{btn.disabled=false;if(!editing)btn.textContent='+ Save Trailer'}}
-function cancelEdit(){document.querySelector('.formpanel')?.classList.remove('editing-highlight');editing=null;$('formTitle').textContent='Add Completed Trailer';$('saveBtn').textContent='+ Save Trailer';$('cancelEdit').classList.add('hidden');$('deleteEdit').classList.add('hidden')}
+function cancelEdit(){
+  // Return to a clean new-entry form without saving or changing the chosen reporting date.
+  editing=null;
+  document.querySelector('.formpanel')?.classList.remove('editing-highlight');
+  $('entryForm').reset();
+  $('store').value='';$('trailer').value='';$('cpt').value='';
+  $('override').value='';$('reason').value='';$('notes').value='';
+  selectedStoreKey='';
+  $('mappingChoice').value='';$('mappingChoice').dataset.selected='';
+  $('formTitle').textContent='Add Completed Trailer';
+  $('saveBtn').disabled=false;$('saveBtn').textContent='+ Save Trailer';
+  $('cancelEdit').classList.add('hidden');
+  $('deleteEdit').classList.add('hidden');
+  $('deleteEdit').disabled=false;$('deleteEdit').textContent='Delete Trailer';
+  lookupStore();checkLow();render();
+  msg('Edit canceled. No changes were saved.');
+}
 function editRecord(id){
   console.info('CPT Edit Build EDIT-04 — requested record',id);
   const e=app.entries.find(x=>String(x.id)===String(id));
